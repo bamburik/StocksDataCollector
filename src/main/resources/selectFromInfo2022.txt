@@ -1,0 +1,2 @@
+SELECT * FROM INFO_2022
+WHERE stock IN ("%s");

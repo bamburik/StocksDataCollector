@@ -1,0 +1,2 @@
+INSERT INTO INFO_2022 (stock, sector, industry, total_assets, total_liabilities, total_revenue)
+VALUES %s;

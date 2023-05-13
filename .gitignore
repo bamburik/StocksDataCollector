@@ -1,0 +1,12 @@
+target/
+out/
+.idea/
+.idea_modules/
+logs/
+*.iml
+*.ipr
+*.iws
+jmeter.log
+testresults.jtl
+../protos/bundle.protoset
+src/main/resources/config.properties
