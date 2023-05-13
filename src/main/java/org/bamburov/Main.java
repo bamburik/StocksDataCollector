@@ -33,7 +33,7 @@ public class Main {
     private static void fulfillDaily() throws Exception {
         List<String> tickers = readFileToList("tickers.txt");
         int tickersPerPage = 20;
-        int startPageIndex = 0;
+        int startPageIndex = props.getStartPageIndex();
         for (int pageIndex = startPageIndex; pageIndex < (tickers.size() / tickersPerPage) + 1; pageIndex++) {
             List<StockDailyInfo> list = new ArrayList<>();
             List<String> sublist = new ArrayList<>();
@@ -131,6 +131,8 @@ public class Main {
         props.setMysqlConnectionString(properties.getProperty("mysql.connection.string"));
         props.setMysqlUsername(properties.getProperty("mysql.username"));
         props.setMysqlPassword(properties.getProperty("mysql.password"));
+        props.setStartPageIndex(Integer.parseInt(properties.getProperty("startPageIndex")));
+        props.setDate(properties.getProperty("date"));
         input.close();
     }
 }

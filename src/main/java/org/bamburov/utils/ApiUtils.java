@@ -11,16 +11,15 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
-import java.time.temporal.TemporalUnit;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 import static io.restassured.RestAssured.given;
+import static org.bamburov.Main.getProps;
 import static org.bamburov.utils.Constants.*;
 
 public class ApiUtils {
@@ -95,7 +94,11 @@ public class ApiUtils {
 
     private static String getDateNow() {
         if (dateNow == null) {
-            dateNow = LocalDateTime.now().minus(12, ChronoUnit.HOURS).format(DateTimeFormatter.ofPattern("yyyy-MM-dd"));
+            if (getProps().getDate().equals("")) {
+                dateNow = LocalDateTime.now().minus(12, ChronoUnit.HOURS).format(DateTimeFormatter.ofPattern("yyyy-MM-dd"));
+            } else {
+                dateNow = getProps().getDate();
+            }
         }
         return dateNow;
     }
