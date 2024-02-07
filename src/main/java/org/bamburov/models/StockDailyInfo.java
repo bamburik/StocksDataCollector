@@ -35,4 +35,5 @@ public class StockDailyInfo {
     private TechnicalAnalysis dayAnalysis;
     private TechnicalAnalysis weekAnalysis;
     private TechnicalAnalysis monthAnalysis;
+    private Integer volume;
 }

@@ -1,37 +1,81 @@
 package org.bamburov;
 
+import io.restassured.path.json.exception.JsonPathException;
+import io.restassured.response.Response;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.bamburov.models.StockDailyInfo;
-import org.bamburov.models.StockInfo2022;
-import org.bamburov.models.TechnicalAnalysis;
+import org.bamburov.models.*;
+import org.bamburov.ta.core.MyPosition;
+import org.bamburov.ta.core.MyTradingRecord;
+import org.bamburov.ta.rule.BollingerAndStochasticBuyMyRule;
+import org.bamburov.ta.rule.Bollinger3InARowUpperRule;
+import org.bamburov.ta.rule.CrossedUpIndicatorRuleWhenInPosition;
+import org.bamburov.utils.*;
+import org.ta4j.core.*;
+import org.ta4j.core.indicators.RSIIndicator;
+import org.ta4j.core.indicators.SMAIndicator;
+import org.ta4j.core.indicators.StochasticOscillatorDIndicator;
+import org.ta4j.core.indicators.StochasticOscillatorKIndicator;
+import org.ta4j.core.indicators.bollinger.BollingerBandsLowerIndicator;
+import org.ta4j.core.indicators.bollinger.BollingerBandsMiddleIndicator;
+import org.ta4j.core.indicators.bollinger.BollingerBandsUpperIndicator;
+import org.ta4j.core.indicators.helpers.ClosePriceIndicator;
+import org.ta4j.core.indicators.helpers.HighPriceIndicator;
+import org.ta4j.core.indicators.helpers.LowPriceIndicator;
+import org.ta4j.core.indicators.helpers.VolumeIndicator;
+import org.ta4j.core.indicators.statistics.StandardDeviationIndicator;
+import org.ta4j.core.num.Num;
+import org.ta4j.core.rules.CrossedDownIndicatorRule;
+import org.ta4j.core.rules.CrossedUpIndicatorRule;
+import org.ta4j.core.rules.StopLossRule;
 
-import java.io.IOException;
-import java.io.InputStream;
+import java.io.*;
 import java.util.*;
 
+import static io.restassured.RestAssured.given;
 import static org.bamburov.utils.ApiUtils.*;
-import static org.bamburov.utils.FileUtils.readFileToList;
+import static org.bamburov.utils.FileUtils.readFileFromResourcesToList;
 import static org.bamburov.utils.MySqlUtils.*;
+import static org.bamburov.utils.TechnicalAnalysisUtils.*;
+import static org.bamburov.utils.TechnicalAnalysisUtils.getRangesWhereRsiAbove68;
+import static org.bamburov.utils.TrendLineUtils.getKOfResistanceLine;
+import static org.bamburov.utils.TrendLineUtils.getKOfSupportLine;
 
 public class Main {
     private static final String LOCAL_CONFIG_PROPERTIES = "config.properties";
     private static Props props;
     private static Logger logger = LogManager.getRootLogger();
+
     public static void main(String[] args) throws Exception {
         try {
             loadProperties();
 
+            //printBollingerAndRsiOrStochastic("2023-11-24");
             createMySqlConnection();
+//            List<String> tickers = readFileFromResourcesToList("strategies/BollingerBandsRsiStochastics2.csv");
+//            int totalAmountOfSignals = printScorePlusMinus3Events(tickers, "2024-02-01", "2024-02-02");
+//            totalAmountOfSignals += printBollingerAndRsiOrStochasticOrHammerStrict(tickers, "2024-02-02");
+//            System.out.println("Total amount of signals - " + totalAmountOfSignals);
+
+
+//            printBollingerAn                                   dStochasticBuyAndSellEventsFor(
+//                    readFileFromResourcesToList("strategies/BollingerBandsStochasticBuy.csv"),
+//                    readFileFromResourcesToList("strategies/BollingerBandsStochasticBuyOpenPositions.txt"),
+//                    "2023-09-20");
             //fulfillInfo2022();
+            //writeToFileFromResources("src/main/resources/strategies/BollingerBandsRsiStochasticsForPostman2.csv" ,getTickersFromNyseAndNasdaq());
             fulfillDaily();
+            //printTechnicalTechnicalSummaryAnalysisEvents();
+            //writePricesAndVolumesToFile();
+            //writeResultsOfBuyByBollingerAndStochastic();
+            //printBollingerStrategy2();
         } finally {
             closeMySqlConnection();
         }
     }
 
     private static void fulfillDaily() throws Exception {
-        List<String> tickers = readFileToList("tickers.txt");
+        List<String> tickers = readFileFromResourcesToList("tickers.txt");
         int tickersPerPage = 20;
         int startPageIndex = props.getStartPageIndex();
         for (int pageIndex = startPageIndex; pageIndex < (tickers.size() / tickersPerPage) + 1; pageIndex++) {
@@ -57,7 +101,7 @@ public class Main {
                         long totalAssets = yearInfo.stream().filter(x -> x.getStock().equals(dailyInfo.getStock())).findFirst().get().getTotalAssets();
                         long totalLiabilities = yearInfo.stream().filter(x -> x.getStock().equals(dailyInfo.getStock())).findFirst().get().getTotalLiabilities();
                         long sharesOutStanding = yearInfo.stream().filter(x -> x.getStock().equals(dailyInfo.getStock())).findFirst().get().getSharesOutstanding();
-                        Double p2bCalc = (dailyInfo.getCurrentPrice() * sharesOutStanding)/(totalAssets - totalLiabilities);
+                        Double p2bCalc = (dailyInfo.getCurrentPrice() * sharesOutStanding) / (totalAssets - totalLiabilities);
                         dailyInfo.setP2bCalc(Double.isInfinite(p2bCalc) || Double.isNaN(p2bCalc) || Double.isFinite(p2bCalc) ? null : p2bCalc);
                     }
                     if (dailyInfo.getCurrentPrice() != null &&
@@ -66,7 +110,7 @@ public class Main {
                             yearInfo.stream().filter(x -> x.getStock().equals(dailyInfo.getStock())).findFirst().get().getSharesOutstanding() != null) {
                         long totalRevenue = yearInfo.stream().filter(x -> x.getStock().equals(dailyInfo.getStock())).findFirst().get().getTotalRevenue();
                         long sharesOutStanding = yearInfo.stream().filter(x -> x.getStock().equals(dailyInfo.getStock())).findFirst().get().getSharesOutstanding();
-                        Double p2sCalc = (dailyInfo.getCurrentPrice() * sharesOutStanding)/totalRevenue;
+                        Double p2sCalc = (dailyInfo.getCurrentPrice() * sharesOutStanding) / totalRevenue;
                         dailyInfo.setP2sCalc(Double.isInfinite(p2sCalc) || Double.isNaN(p2sCalc) || Double.isFinite(p2sCalc) ? null : p2sCalc);
                     }
                     if (dailyInfo.getDoesHaveTechnicalData()) {
@@ -117,6 +161,567 @@ public class Main {
                     Arrays.toString(tickers.toArray()));
             i++;
         } while (tickers != null && tickers.size() > 0);
+    }
+
+    public static void testHammerPattern(List<String> tickers, int lengthOfPosition) {
+        for (int i = 0; i < tickers.size();i++) {
+            System.out.println(i + ". test Hammer on " + tickers.get(i) + "ticker");
+
+            // Read data and calculate indicators
+            BarSeries series = null;
+            try {
+                series = fillDataFor(tickers.get(i));
+            } catch (IOException e) {
+                continue;
+            } catch (JsonPathException e) {
+                continue;
+            }
+            // Filter stocks with low liquidity
+            if (series.getBarData().stream().filter(s -> s.getVolume().doubleValue() < 50).toList().size() > 10) {
+                continue;
+            }
+            ClosePriceIndicator close = new ClosePriceIndicator(series);
+            SMAIndicator lowSma = new SMAIndicator(new LowPriceIndicator(series), 10);
+            for (int j = 60; j <= series.getEndIndex(); j++) {
+                if (!isCandleRed(series.getBar(j)) && close.getValue(j).isGreaterThan(close.getValue(j - 1))
+                        && isBullishShavenTopWithLongShadow(series.getBar(j - 1))
+                        && lowSma.getValue(j - 2).isLessThan(lowSma.getValue(j - 3))
+                        && lowSma.getValue(j - 3).isLessThan(lowSma.getValue(j - 4))
+                        && lowSma.getValue(j - 4).isLessThan(lowSma.getValue(j - 5))
+                        && lowSma.getValue(j - 5).isLessThan(lowSma.getValue(j - 6))
+                        && lowSma.getValue(j - 6).isLessThan(lowSma.getValue(j - 7))
+                        && lowSma.getValue(j - 7).isLessThan(lowSma.getValue(j - 8))
+                        && lowSma.getValue(j - 8).isLessThan(lowSma.getValue(j - 9))
+                        && lowSma.getValue(j - 9).isLessThan(lowSma.getValue(j - 10))
+                        && lowSma.getValue(j - 10).isLessThan(lowSma.getValue(j - 11))) {
+                    Num entryPrice = series.getBar(j + 1).getOpenPrice();
+                }
+            }
+        }
+    }
+
+    public static int printScorePlusMinus3Events(List<String> tickers, String startDate, String endDate) throws Exception {
+//        List<String> tickers = readFileFromResourcesToList("tickers.txt");
+        List<ScoreChangeEventInfo> scoreChangeEventInfoList = MySqlUtils.catchScorePlus3Events(tickers, startDate, endDate);
+        scoreChangeEventInfoList = MySqlUtils.setScoreChangesTrend(scoreChangeEventInfoList);
+        System.out.println("Score +- 3 events");
+        for (ScoreChangeEventInfo info : scoreChangeEventInfoList) {
+            System.out.println((info.getCurrentScore() > info.getPrevScore() ? "Buy - " : "Sell - ") + info.getTicker() +
+                    "; Current Score - " + info.getCurrentScore() + "; Prev Score - " + info.getPrevScore() +
+                    "; Score History - " + info.getScoreHistory());
+        }
+        return scoreChangeEventInfoList.size();
+//        scoreChangeEventInfoList = ApiUtils.setPriceTrend(scoreChangeEventInfoList);
+//        ExcelUtils.write(scoreChangeEventInfoList);
+//        MySqlUtils.close();
+    }
+
+    public static void printTechnicalTechnicalSummaryAnalysisEvents() throws Exception {
+        for (String sector : MySqlUtils.getSectors()) {
+            List<TechnicalAnalysisChangeEventInfo> list = MySqlUtils.catchTechnicalDaySummaryBecameBuyEvents(sector, "2023-04-21", "2023-08-21");
+            ApiUtils.setPrices(list);
+            ExcelUtils.write2(list, sector + ".xlsx");
+        }
+    }
+
+    public static void writePricesAndVolumesToFile() throws IOException {
+        List<String> tickers = readFileFromResourcesToList("tickers.txt");
+        for (String ticker : tickers) {
+            Response response = null;
+            try {
+                response = ApiUtils.getStockDailyInfoResponse(ticker);
+            } catch (Exception e) {
+                continue;
+            }
+            String responseBody = response.getBody().asPrettyString();
+            File currDir = new File(".");
+            String path = currDir.getAbsolutePath();
+            String fileLocation = path.substring(0, path.length() - 1) + "prices\\" + ticker + ".json";
+            BufferedWriter writer = new BufferedWriter(new FileWriter(fileLocation));
+            writer.write(JsonUtils.getJsonNodeValue(responseBody, "common.prices.data"));
+
+            writer.close();
+        }
+    }
+
+    public static void writeResultsOfBuyByBollingerAndStochastic() throws IOException {
+        List<MyTradingRecord> myTradingRecords = new ArrayList<>();
+        List<String> tickers = readFileFromResourcesToList("tickers.txt");
+        int period = 20;
+        int lengthOfRecentPeriod = 3;
+        for (int i = 5000; i < tickers.size(); i++) {
+            System.out.println(tickers.get(i));
+            // Read data and calculate indicators
+            BarSeries series = null;
+            try {
+                series = fillDataFor(tickers.get(i));
+            } catch (IOException e) {
+                continue;
+            } catch (JsonPathException e) {
+                continue;
+            }
+            // Filter stocks with low liquidity
+            if (series.getBarData().stream().filter(s -> s.getVolume().doubleValue() < 50).toList().size() > 10) {
+                continue;
+            }
+            ClosePriceIndicator closePrice = new ClosePriceIndicator(series);
+            HighPriceIndicator highPrice = new HighPriceIndicator(series);
+            LowPriceIndicator lowPrice = new LowPriceIndicator(series);
+            SMAIndicator sma = new SMAIndicator(closePrice, period);
+            StandardDeviationIndicator standardDeviation = new StandardDeviationIndicator(closePrice, period);
+            BollingerBandsMiddleIndicator bbm = new BollingerBandsMiddleIndicator(sma);
+            BollingerBandsLowerIndicator bbl = new BollingerBandsLowerIndicator(bbm, standardDeviation);
+            BollingerBandsUpperIndicator bbu = new BollingerBandsUpperIndicator(bbm, standardDeviation);
+            StochasticOscillatorKIndicator sok = new StochasticOscillatorKIndicator(series, period);
+            StochasticOscillatorDIndicator sod = new StochasticOscillatorDIndicator(sok);
+
+            // Run 4 strategies with different stop losses (6, 8, 10, 12)
+            for (int stopLossPercent = 6; stopLossPercent <= 12; stopLossPercent += 2) {
+                BollingerAndStochasticBuyMyRule buyMyRule = new BollingerAndStochasticBuyMyRule(
+                        sok,
+                        sod,
+                        bbl,
+                        lowPrice,
+                        period,
+                        lengthOfRecentPeriod
+                );
+                Rule sellingRule2 = new CrossedUpIndicatorRuleWhenInPosition(new CrossedUpIndicatorRule(highPrice, bbu))
+                        .or(new CrossedDownIndicatorRule(highPrice, bbm))
+                        .or(new StopLossRule(closePrice, stopLossPercent));
+                Strategy strategy2 = new BaseStrategy(buyMyRule, sellingRule2);
+                BarSeriesManager manager2 = new BarSeriesManager(series);
+                TradingRecord tradingRecord2 = manager2.run(strategy2);
+                List<MyPosition> list2 = new ArrayList<>();
+                for(Position position : tradingRecord2.getPositions()) {
+                    int exitIndex = position.getExit().getIndex();
+                    double exitPrice = 0;
+                    if (new CrossedUpIndicatorRule(highPrice, bbu).isSatisfied(exitIndex)) {
+                        exitPrice = bbu.getValue(exitIndex).doubleValue();
+                    } else if (new CrossedDownIndicatorRule(highPrice, bbm).isSatisfied(exitIndex)) {
+                        if (exitIndex != series.getBarCount() - 1) {
+                            exitIndex++;
+                            exitPrice = series.getBar(exitIndex).getOpenPrice().doubleValue();
+                        } else {
+                            exitPrice = series.getBar(exitIndex).getClosePrice().doubleValue();
+                        }
+                    } else {
+                        exitPrice = position.getEntry().getNetPrice().doubleValue() * ((100d - stopLossPercent) / 100d);
+                    }
+                    MyPosition myPosition = new MyPosition(Trade.TradeType.BUY, position.getEntry().getIndex(), exitIndex, position.getEntry().getPricePerAsset().doubleValue(), exitPrice);
+                    list2.add(myPosition);
+                }
+                myTradingRecords.add(new MyTradingRecord(tickers.get(i), stopLossPercent, list2));
+            }
+        }
+        ExcelUtils.writeResultsOfBuyByBollingerAndStochastic(myTradingRecords);
+    }
+
+    public static void printBollingerAndStochasticBuyAndSellEventsFor(
+            List<String> tickersToBuyWithStopLoss,
+            List<String> tickersToSellWithStopLoss,
+            String date) throws IOException {
+        int countOfTickerWithNoInfo = 0;
+        for (String str: tickersToBuyWithStopLoss) {
+            String ticker = str.split(",")[0];
+            String stopLoss = str.split(",")[1];
+            BarSeries series = TechnicalAnalysisUtils.getBarSeriesFor(ticker, 23, date);
+            if (series == null) {
+                countOfTickerWithNoInfo++;
+                System.out.println(countOfTickerWithNoInfo + ". No info for " + ticker);
+                continue;
+            }
+            ClosePriceIndicator closePrice = new ClosePriceIndicator(series);
+            LowPriceIndicator lowPrice = new LowPriceIndicator(series);
+            SMAIndicator sma = new SMAIndicator(closePrice, 20);
+            StandardDeviationIndicator standardDeviation = new StandardDeviationIndicator(closePrice, 20);
+            BollingerBandsMiddleIndicator bbm = new BollingerBandsMiddleIndicator(sma);
+            BollingerBandsLowerIndicator bbl = new BollingerBandsLowerIndicator(bbm, standardDeviation);
+            StochasticOscillatorKIndicator sok = new StochasticOscillatorKIndicator(series, 20);
+            StochasticOscillatorDIndicator sod = new StochasticOscillatorDIndicator(sok);
+            BollingerAndStochasticBuyMyRule buyMyRule = new BollingerAndStochasticBuyMyRule(
+                    sok,
+                    sod,
+                    bbl,
+                    lowPrice,
+                    20,
+                    3
+            );
+            if (buyMyRule.isSatisfied(series.getEndIndex())) {
+                System.out.println("!!!");
+                System.out.println("Buy " + ticker + " and set " + stopLoss + "% stop loss");
+                System.out.println("!!!");
+                System.out.println("");
+            }
+            if (tickersToSellWithStopLoss.contains(ticker)) {
+                HighPriceIndicator highPrice = new HighPriceIndicator(series);
+                BollingerBandsUpperIndicator bbu = new BollingerBandsUpperIndicator(bbm, standardDeviation);
+                Rule sellingRule = new CrossedUpIndicatorRule(highPrice, bbu)
+                        .or(new CrossedDownIndicatorRule(highPrice, bbm));
+                if (sellingRule.isSatisfied(series.getEndIndex())) {
+                    System.out.println("!!!");
+                    System.out.println("Sell(close position) " + ticker);
+                    System.out.println("!!!");
+                    System.out.println("");
+                }
+            }
+        }
+    }
+
+    public static void printBollingerAndRsiOrStochastic(String date) throws IOException {
+        List<String> tickers = readFileFromResourcesToList("strategies/BollingerBandsRsiStochastics2.csv");
+        //List<String> tickers = Arrays.asList("CEIX");
+        for (String ticker : tickers) {
+            try {
+                BarSeries series = TechnicalAnalysisUtils.getBarSeriesFor(ticker, 60, date);
+                ClosePriceIndicator close = new ClosePriceIndicator(series);
+                RSIIndicator rsi = new RSIIndicator(close, 14);
+                SMAIndicator sma = new SMAIndicator(close, 20);
+                StandardDeviationIndicator standardDeviation = new StandardDeviationIndicator(close, 20);
+                BollingerBandsMiddleIndicator bbm = new BollingerBandsMiddleIndicator(sma);
+                BollingerBandsLowerIndicator bbl = new BollingerBandsLowerIndicator(bbm, standardDeviation);
+                BollingerBandsUpperIndicator bbu = new BollingerBandsUpperIndicator(bbm, standardDeviation);
+                StochasticOscillatorKIndicator sok = new StochasticOscillatorKIndicator(series, 20);
+                boolean firstRsiLow = false, firstRsiHigh = false, firstStochasticLow = false, firstStochasticHigh = false;
+                for (int i = series.getEndIndex() - 15; i <= series.getEndIndex() - 5; i++) {
+                    if (rsi.getValue(i).doubleValue() < 32 &&
+                            close.getValue(i).isLessThan(bbl.getValue(i))) {
+                        firstRsiLow = true;
+                    } else if (rsi.getValue(i).doubleValue() > 68 &&
+                            close.getValue(i).isGreaterThan(bbu.getValue(i))) {
+                        firstRsiHigh = true;
+                    }
+
+                    if (sok.getValue(i).doubleValue() < 20 &&
+                            close.getValue(i).isLessThan(bbl.getValue(i))) {
+                        firstStochasticLow = true;
+                    } else if (sok.getValue(i).doubleValue() > 80 &&
+                            close.getValue(i).isGreaterThan(bbu.getValue(i))) {
+                        firstStochasticHigh = true;
+                    }
+                }
+
+                if (firstRsiLow) {
+                    if ((getKOfSupportLine(close, 15) < 0 && getKOfSupportLine(rsi, 15) > 0)
+                            || (getKOfSupportLine(close, 10) < 0 && getKOfSupportLine(rsi, 10) > 0)
+                            || (getKOfSupportLine(close, 5) < 0 && getKOfSupportLine(rsi, 5) > 0)) {
+                        System.out.println("Buy " + ticker + " (RSI)");
+                    }
+                }
+                if (firstStochasticLow) {
+                    if ((getKOfSupportLine(close, 15) < 0 && getKOfSupportLine(sok, 15) > 0)
+                            || (getKOfSupportLine(close, 10) < 0 && getKOfSupportLine(sok, 10) > 0)
+                            || (getKOfSupportLine(close, 5) < 0 && getKOfSupportLine(sok, 5) > 0)) {
+                        System.out.println("Buy " + ticker + " (StochasticOscillator)");
+                    }
+                }
+                if (firstRsiHigh) {
+                    if ((getKOfResistanceLine(close, 15) > 0 && getKOfResistanceLine(rsi, 15) < 0)
+                            || (getKOfResistanceLine(close, 10) > 0 && getKOfResistanceLine(rsi, 10) < 0)
+                            || (getKOfResistanceLine(close, 5) > 0 && getKOfResistanceLine(rsi, 5) < 0)) {
+                        System.out.println("Sell " + ticker + " (RSI)");
+                    }
+                }
+                if (firstStochasticHigh) {
+                    if ((getKOfResistanceLine(close, 15) > 0 && getKOfResistanceLine(sok, 15) < 0)
+                            || (getKOfResistanceLine(close, 10) > 0 && getKOfResistanceLine(sok, 10) < 0)
+                            || (getKOfResistanceLine(close, 5) > 0 && getKOfResistanceLine(sok, 5) < 0)) {
+                        System.out.println("Sell " + ticker + " (StochasticOscillator)");
+                    }
+                }
+            } catch (Exception e) {
+                continue;
+            }
+        }
+    }
+
+    public static int printBollingerAndRsiOrStochasticOrHammerStrict(List<String> tickers, String date) throws IOException {
+        int period = 60;
+        int lastIndex = period - 1;
+        int minLastIndexForRange = period - 5;
+        int amountTickersOfFilteredByVolume = 0, amountOfTickersFileWasNotFoundFor = 0, amountOfTickersWithLackOfData = 0, totalAmountOfSignals = 0;
+        for (String ticker : tickers) {
+            try {
+                BarSeries series = TechnicalAnalysisUtils.getBarSeriesFor(ticker, period, date);
+                ClosePriceIndicator close = new ClosePriceIndicator(series);
+                VolumeIndicator volume = new VolumeIndicator(series);
+                if (volume.getValue(lastIndex).multipliedBy(new SMAIndicator(close, 40).getValue(lastIndex))
+                        .isLessThan(volume.numOf(2000000))) {
+                    continue;
+                }
+                amountTickersOfFilteredByVolume++;
+
+                RSIIndicator rsi = new RSIIndicator(close, 14);
+                SMAIndicator sma = new SMAIndicator(close, 20);
+                StandardDeviationIndicator standardDeviation = new StandardDeviationIndicator(close, 20);
+                BollingerBandsMiddleIndicator bbm = new BollingerBandsMiddleIndicator(sma);
+                BollingerBandsLowerIndicator bbl = new BollingerBandsLowerIndicator(bbm, standardDeviation);
+                BollingerBandsUpperIndicator bbu = new BollingerBandsUpperIndicator(bbm, standardDeviation);
+                StochasticOscillatorKIndicator sok = new StochasticOscillatorKIndicator(series, 20);
+
+                List<int[]> rangesWhereRsiBelow32 = getRangesWhereRsiBelow32(rsi, lastIndex, 30);
+                if (rangesWhereRsiBelow32.size() > 1 && rangesWhereRsiBelow32.get(0)[1] >= minLastIndexForRange) {
+                    boolean lastMinBelowBbl = false;
+                    for (int index = rangesWhereRsiBelow32.get(0)[0]; index <= rangesWhereRsiBelow32.get(0)[1]; index++) {
+                        if (close.getValue(index).isLessThan(bbl.getValue(index))) {
+                            lastMinBelowBbl = true;
+                            break;
+                        }
+                    }
+                    boolean prevLastMinBelowBbl = false;
+                    for (int index = rangesWhereRsiBelow32.get(1)[0]; index <= rangesWhereRsiBelow32.get(1)[1]; index++) {
+                        if (close.getValue(index).isLessThan(bbl.getValue(index))) {
+                            prevLastMinBelowBbl = true;
+                            break;
+                        }
+                    }
+                    double minLastRsi = inditatorToList(rsi, rangesWhereRsiBelow32.get(0)[0], rangesWhereRsiBelow32.get(0)[1]).stream().min(Double::compareTo).get();
+                    double minPrevLastRsi = inditatorToList(rsi, rangesWhereRsiBelow32.get(1)[0], rangesWhereRsiBelow32.get(1)[1]).stream().min(Double::compareTo).get();
+                    double minLastPrice = inditatorToList(close, rangesWhereRsiBelow32.get(0)[0], rangesWhereRsiBelow32.get(0)[1]).stream().min(Double::compareTo).get();
+                    double minPrevLastPrice = inditatorToList(close, rangesWhereRsiBelow32.get(1)[0], rangesWhereRsiBelow32.get(1)[1]).stream().min(Double::compareTo).get();
+                    if (lastMinBelowBbl && prevLastMinBelowBbl
+                            && minLastPrice < minPrevLastPrice * 0.98
+                            && minLastRsi > minPrevLastRsi + 1
+                            && rangesWhereRsiBelow32.get(0)[1] < lastIndex) {
+                        System.out.println("Buy " + ticker + " (RSI Divergence); Last Index = " + rangesWhereRsiBelow32.get(0)[1]);
+                        totalAmountOfSignals++;
+                    }
+                }
+
+                List<int[]> rangesWhereRsiAbove68 = getRangesWhereRsiAbove68(rsi, lastIndex, 30);
+                if (rangesWhereRsiAbove68.size() > 1 && rangesWhereRsiAbove68.get(0)[1] >= minLastIndexForRange) {
+                    boolean lastMaxAboveBbu = false;
+                    for (int index = rangesWhereRsiAbove68.get(0)[0]; index <= rangesWhereRsiAbove68.get(0)[1]; index++) {
+                        if (close.getValue(index).isGreaterThan(bbu.getValue(index))) {
+                            lastMaxAboveBbu = true;
+                            break;
+                        }
+                    }
+                    boolean prevLastMaxAboveBbu = false;
+                    for (int index = rangesWhereRsiAbove68.get(1)[0]; index <= rangesWhereRsiAbove68.get(1)[1]; index++) {
+                        if (close.getValue(index).isGreaterThan(bbu.getValue(index))) {
+                            prevLastMaxAboveBbu = true;
+                            break;
+                        }
+                    }
+                    double maxLastRsi = inditatorToList(rsi, rangesWhereRsiAbove68.get(0)[0], rangesWhereRsiAbove68.get(0)[1]).stream().max(Double::compareTo).get();
+                    double maxPrevLastRsi = inditatorToList(rsi, rangesWhereRsiAbove68.get(1)[0], rangesWhereRsiAbove68.get(1)[1]).stream().max(Double::compareTo).get();
+                    double maxLastPrice = inditatorToList(close, rangesWhereRsiAbove68.get(0)[0], rangesWhereRsiAbove68.get(0)[1]).stream().max(Double::compareTo).get();
+                    double maxPrevLastPrice = inditatorToList(close, rangesWhereRsiAbove68.get(1)[0], rangesWhereRsiAbove68.get(1)[1]).stream().max(Double::compareTo).get();
+                    if (lastMaxAboveBbu && prevLastMaxAboveBbu
+                            && maxLastPrice > maxPrevLastPrice * 1.02
+                            && maxLastRsi < maxPrevLastRsi - 1
+                            && rangesWhereRsiAbove68.get(0)[1] < lastIndex) {
+                        System.out.println("Sell " + ticker + " (RSI Divergence); Last Index = " + rangesWhereRsiAbove68.get(0)[1]);
+                        totalAmountOfSignals++;
+                    }
+                }
+
+                List<int[]> rangesWhereStochasticBelow20 = getRangesWhereStochasticBelow20(sok, lastIndex, 30);
+                if (rangesWhereStochasticBelow20.size() > 1 && rangesWhereStochasticBelow20.get(0)[1] >= minLastIndexForRange) {
+                    boolean lastMinBelowBbl = false;
+                    for (int index = rangesWhereStochasticBelow20.get(0)[0]; index <= rangesWhereStochasticBelow20.get(0)[1]; index++) {
+                        if (close.getValue(index).isLessThan(bbl.getValue(index))) {
+                            lastMinBelowBbl = true;
+                            break;
+                        }
+                    }
+                    boolean prevLastMinBelowBbl = false;
+                    for (int index = rangesWhereStochasticBelow20.get(1)[0]; index <= rangesWhereStochasticBelow20.get(1)[1]; index++) {
+                        if (close.getValue(index).isLessThan(bbl.getValue(index))) {
+                            prevLastMinBelowBbl = true;
+                            break;
+                        }
+                    }
+                    double minLastStochastic = inditatorToList(sok, rangesWhereStochasticBelow20.get(0)[0], rangesWhereStochasticBelow20.get(0)[1]).stream().min(Double::compareTo).get();
+                    double minPrevStochastic = inditatorToList(sok, rangesWhereStochasticBelow20.get(1)[0], rangesWhereStochasticBelow20.get(1)[1]).stream().min(Double::compareTo).get();
+                    double minLastPrice = inditatorToList(close, rangesWhereStochasticBelow20.get(0)[0], rangesWhereStochasticBelow20.get(0)[1]).stream().min(Double::compareTo).get();
+                    double minPrevLastPrice = inditatorToList(close, rangesWhereStochasticBelow20.get(1)[0], rangesWhereStochasticBelow20.get(1)[1]).stream().min(Double::compareTo).get();
+                    if (lastMinBelowBbl && prevLastMinBelowBbl
+                            && minLastPrice < minPrevLastPrice * 0.98
+                            && minLastStochastic > minPrevStochastic + 0.7
+                            && rangesWhereStochasticBelow20.get(0)[1] < lastIndex) {
+                        System.out.println("Buy " + ticker + " (Stochastic Divergence); Last Index = " + rangesWhereStochasticBelow20.get(0)[1]);
+                        totalAmountOfSignals++;
+                    }
+                }
+
+                List<int[]> rangesWhereStochasticAbove80 = getRangesWhereStochasticAbove80(sok, lastIndex, 30);
+                if (rangesWhereStochasticAbove80.size() > 1 && rangesWhereStochasticAbove80.get(0)[1] >= minLastIndexForRange) {
+                    boolean lastMaxAboveBbu = false;
+                    for (int index = rangesWhereStochasticAbove80.get(0)[0]; index <= rangesWhereStochasticAbove80.get(0)[1]; index++) {
+                        if (close.getValue(index).isGreaterThan(bbu.getValue(index))) {
+                            lastMaxAboveBbu = true;
+                            break;
+                        }
+                    }
+                    boolean prevLastMaxAboveBbu = false;
+                    for (int index = rangesWhereStochasticAbove80.get(1)[0]; index <= rangesWhereStochasticAbove80.get(1)[1]; index++) {
+                        if (close.getValue(index).isGreaterThan(bbu.getValue(index))) {
+                            prevLastMaxAboveBbu = true;
+                            break;
+                        }
+                    }
+                    double maxLastStochastic = inditatorToList(sok, rangesWhereStochasticAbove80.get(0)[0], rangesWhereStochasticAbove80.get(0)[1]).stream().max(Double::compareTo).get();
+                    double maxPrevLastStochastic = inditatorToList(sok, rangesWhereStochasticAbove80.get(1)[0], rangesWhereStochasticAbove80.get(1)[1]).stream().max(Double::compareTo).get();
+                    double maxLastPrice = inditatorToList(close, rangesWhereStochasticAbove80.get(0)[0], rangesWhereStochasticAbove80.get(0)[1]).stream().max(Double::compareTo).get();
+                    double maxPrevLastPrice = inditatorToList(close, rangesWhereStochasticAbove80.get(1)[0], rangesWhereStochasticAbove80.get(1)[1]).stream().max(Double::compareTo).get();
+                    if (lastMaxAboveBbu && prevLastMaxAboveBbu
+                            && maxLastPrice > maxPrevLastPrice * 1.02
+                            && maxLastStochastic < maxPrevLastStochastic - 0.7
+                            && rangesWhereStochasticAbove80.get(0)[1] < lastIndex) {
+                        System.out.println("Sell " + ticker + " (Stochastic Divergence); Last Index = " + rangesWhereStochasticAbove80.get(0)[1]);
+                        totalAmountOfSignals++;
+                    }
+                }
+
+                int countOfRedCandles = 0;
+                if (isCandleRed(series.getBar(lastIndex - 1))) {
+                    countOfRedCandles++;
+                }
+                if (isCandleRed(series.getBar(lastIndex - 2))) {
+                    countOfRedCandles++;
+                }
+                if (isCandleRed(series.getBar(lastIndex - 3))) {
+                    countOfRedCandles++;
+                }
+                if (isBullishShavenTopWithLongShadow(series.getBar(lastIndex))
+                        && countOfRedCandles >= 2
+                        && series.getBar(lastIndex - 1).getClosePrice().isLessThan(series.getBar(lastIndex - 2).getClosePrice())
+                        && series.getBar(lastIndex - 2).getClosePrice().isLessThan(series.getBar(lastIndex - 3).getClosePrice())) {
+                    System.out.println("Buy " + ticker + " (Hammer pattern)");
+                    totalAmountOfSignals++;
+                }
+
+                int countOfGreenCandles = 0;
+                if (!isCandleRed(series.getBar(lastIndex - 1))) {
+                    countOfGreenCandles++;
+                }
+                if (!isCandleRed(series.getBar(lastIndex - 2))) {
+                    countOfGreenCandles++;
+                }
+                if (!isCandleRed(series.getBar(lastIndex - 3))) {
+                    countOfGreenCandles++;
+                }
+                if (isBearishShavenTopWithLongShadow(series.getBar(lastIndex))
+                        && countOfGreenCandles >= 2
+                        && series.getBar(lastIndex - 1).getClosePrice().isGreaterThan(series.getBar(lastIndex - 2).getClosePrice())
+                        && series.getBar(lastIndex - 2).getClosePrice().isGreaterThan(series.getBar(lastIndex - 3).getClosePrice())) {
+                    System.out.println("Sell " + ticker + " (Hanging man pattern)");
+                    totalAmountOfSignals++;
+                }
+
+                countOfRedCandles = 0;
+                if (isCandleRed(series.getBar(lastIndex - 2))) {
+                    countOfRedCandles++;
+                }
+                if (isCandleRed(series.getBar(lastIndex - 3))) {
+                    countOfRedCandles++;
+                }
+                if (isCandleRed(series.getBar(lastIndex - 4))) {
+                    countOfRedCandles++;
+                }
+                if (isCandleRed(series.getBar(lastIndex - 1)) && !isCandleRed(series.getBar(lastIndex))
+                        && countOfRedCandles >= 2
+                        && series.getBar(lastIndex - 1).getOpenPrice().isGreaterThan(series.getBar(lastIndex).getHighPrice())
+                        && series.getBar(lastIndex - 1).getClosePrice().isLessThan(series.getBar(lastIndex).getLowPrice())) {
+                    System.out.println("Buy " + ticker + " (Harami pattern)");
+                    totalAmountOfSignals++;
+                }
+
+                countOfGreenCandles = 0;
+                if (!isCandleRed(series.getBar(lastIndex - 2))) {
+                    countOfGreenCandles++;
+                }
+                if (!isCandleRed(series.getBar(lastIndex - 3))) {
+                    countOfGreenCandles++;
+                }
+                if (!isCandleRed(series.getBar(lastIndex - 4))) {
+                    countOfGreenCandles++;
+                }
+                if (!isCandleRed(series.getBar(lastIndex - 1)) && isCandleRed(series.getBar(lastIndex))
+                        && countOfGreenCandles >= 2
+                        && series.getBar(lastIndex - 1).getHighPrice().isLessThan(series.getBar(lastIndex).getOpenPrice())
+                        && series.getBar(lastIndex - 1).getLowPrice().isGreaterThan(series.getBar(lastIndex).getClosePrice())) {
+                    System.out.println("Sell " + ticker + " (Bearish Engulfing pattern)");
+                    totalAmountOfSignals++;
+                }
+
+                countOfRedCandles = 0;
+                if (isCandleRed(series.getBar(lastIndex - 2))) {
+                    countOfRedCandles++;
+                }
+                if (isCandleRed(series.getBar(lastIndex - 3))) {
+                    countOfRedCandles++;
+                }
+                if (isCandleRed(series.getBar(lastIndex - 4))) {
+                    countOfRedCandles++;
+                }
+                if (isCandleRed(series.getBar(lastIndex - 1)) && !isCandleRed(series.getBar(lastIndex))
+                        && countOfRedCandles >= 2
+                        && series.getBar(lastIndex - 1).getHighPrice().isLessThan(series.getBar(lastIndex).getClosePrice())
+                        && series.getBar(lastIndex - 1).getLowPrice().isGreaterThan(series.getBar(lastIndex).getOpenPrice())) {
+                    System.out.println("Buy " + ticker + " (Bullish Engulfing pattern)");
+                    totalAmountOfSignals++;
+                }
+            } catch (NullPointerException e) {
+                amountOfTickersWithLackOfData++;
+            } catch (FileNotFoundException e) {
+                amountOfTickersFileWasNotFoundFor++;
+            } catch (Exception e) {
+                System.out.println("exception on " + ticker);
+                System.out.println(e.getClass().getName());
+                System.out.println(e.getMessage());
+            }
+        }
+        System.out.println("Total amount of tickers - " + tickers.size());
+        System.out.println("Amount of tickers filtered by amount - " + amountTickersOfFilteredByVolume);
+        System.out.println("Amount of tickers where were not enough candles data - " + amountOfTickersWithLackOfData);
+        System.out.println("Amount of tickers file was not fount for - " + amountOfTickersFileWasNotFoundFor);
+        return totalAmountOfSignals;
+    }
+
+    public static void printBollingerStrategy2() throws IOException {
+        List<MyTradingRecord> myTradingRecords = new ArrayList<>();
+        List<String> tickers = readFileFromResourcesToList("tickers.txt");
+        int period = 20;
+        for (int i = 0; i < 2000; i++) {
+            System.out.println(tickers.get(i));
+            // Read data and calculate indicators
+            BarSeries series = null;
+            try {
+                series = fillDataFor(tickers.get(i));
+            } catch (IOException e) {
+                continue;
+            } catch (JsonPathException e) {
+                continue;
+            }
+            // Filter stocks with low liquidity
+            if (series.getBarData().stream().filter(s -> s.getVolume().doubleValue() < 50).toList().size() > 10) {
+                continue;
+            }
+            ClosePriceIndicator closePrice = new ClosePriceIndicator(series);
+            SMAIndicator sma = new SMAIndicator(closePrice, period);
+            StandardDeviationIndicator standardDeviation = new StandardDeviationIndicator(closePrice, period);
+            BollingerBandsMiddleIndicator bbm = new BollingerBandsMiddleIndicator(sma);
+            BollingerBandsLowerIndicator bbl = new BollingerBandsLowerIndicator(bbm, standardDeviation);
+            BollingerBandsUpperIndicator bbu = new BollingerBandsUpperIndicator(bbm, standardDeviation);
+            // Run 4 strategies with different stop losses (6, 8, 10, 12)
+            for (int stopLossPercent = 6; stopLossPercent <= 12; stopLossPercent += 2) {
+                Bollinger3InARowUpperRule buyRule = new Bollinger3InARowUpperRule(closePrice, bbu);
+                Rule sellRule = new CrossedDownIndicatorRule(closePrice, sma)
+                        .or(new StopLossRule(closePrice, stopLossPercent));
+                Strategy strategy2 = new BaseStrategy(buyRule, sellRule);
+                BarSeriesManager manager2 = new BarSeriesManager(series);
+                TradingRecord tradingRecord2 = manager2.run(strategy2);
+                List<MyPosition> list2 = new ArrayList<>();
+                for(Position position : tradingRecord2.getPositions()) {
+                    MyPosition myPosition = new MyPosition(Trade.TradeType.BUY, position.getEntry().getIndex(), position.getExit().getIndex(), position.getEntry().getPricePerAsset().doubleValue(), position.getExit().getPricePerAsset().doubleValue());
+                    list2.add(myPosition);
+                }
+                myTradingRecords.add(new MyTradingRecord(tickers.get(i), stopLossPercent, list2));
+            }
+        }
+        ExcelUtils.writeResultsOfBuyByBollingerAndStochastic(myTradingRecords);
     }
 
     public static Props getProps() {

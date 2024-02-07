@@ -1,19 +1,16 @@
 package org.bamburov.utils;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
+import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
 public class FileUtils {
-    public static String readFileToString(String pathToFileFromResources) {
-        return String.join("\n", readFileToList(pathToFileFromResources));
+    public static String readFileFromResourcesToString(String pathToFileFromResources) {
+        return String.join("\n", readFileFromResourcesToList(pathToFileFromResources));
     }
 
-    public static List<String> readFileToList(String pathToFileFromResources) {
+    public static List<String> readFileFromResourcesToList(String pathToFileFromResources) {
         InputStream inputStream = FileUtils.class.getClassLoader().getResourceAsStream(pathToFileFromResources);
         List<String> result = new ArrayList<>();
         try (InputStreamReader streamReader =
@@ -27,5 +24,29 @@ public class FileUtils {
             e.printStackTrace();
         }
         return result;
+    }
+
+    public static String readFileFromProject(String pathFromProjectFolder) throws IOException {
+        File file = new File(pathFromProjectFolder);
+        InputStream inputStream = new FileInputStream(file);
+        StringBuilder resultStringBuilder = new StringBuilder();
+        try (BufferedReader br
+                     = new BufferedReader(new InputStreamReader(inputStream))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                resultStringBuilder.append(line).append("\n");
+            }
+        }
+        return resultStringBuilder.toString();
+    }
+
+    public static void writeToFileFromResources(String fileName, List<String> lines) throws IOException {
+        BufferedWriter writer = new BufferedWriter(new FileWriter(fileName));
+        writer.write("ticker");
+        for (String line : lines) {
+            writer.newLine();
+            writer.write(line);
+        }
+        writer.close();
     }
 }
