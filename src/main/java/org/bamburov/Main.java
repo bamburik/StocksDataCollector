@@ -1,10 +1,16 @@
 package org.bamburov;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.restassured.path.json.exception.JsonPathException;
 import io.restassured.response.Response;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.bamburov.models.*;
+import org.bamburov.models.backTestingOutputData.IntermediateResult;
+import org.bamburov.models.backTestingOutputData.Result;
+import org.bamburov.models.backTestingOutputData.TrueSignalsData;
 import org.bamburov.ta.core.MyPosition;
 import org.bamburov.ta.core.MyTradingRecord;
 import org.bamburov.ta.rule.BollingerAndStochasticBuyMyRule;
@@ -31,9 +37,12 @@ import org.ta4j.core.rules.StopLossRule;
 
 import java.io.*;
 import java.util.*;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import static io.restassured.RestAssured.given;
 import static org.bamburov.utils.ApiUtils.*;
+import static org.bamburov.utils.FileUtils.readFileFromProject;
 import static org.bamburov.utils.FileUtils.readFileFromResourcesToList;
 import static org.bamburov.utils.MySqlUtils.*;
 import static org.bamburov.utils.TechnicalAnalysisUtils.*;
@@ -51,8 +60,9 @@ public class Main {
             loadProperties();
 
             //printBollingerAndRsiOrStochastic("2023-11-24");
-            createMySqlConnection();
-//            List<String> tickers = readFileFromResourcesToList("strategies/BollingerBandsRsiStochastics2.csv");
+//            createMySqlConnection();
+            List<String> tickers = readFileFromResourcesToList("strategies/BollingerBandsRsiStochastics2.csv");
+            testHammerPattern(tickers, 15);
 //            int totalAmountOfSignals = printScorePlusMinus3Events(tickers, "2024-02-01", "2024-02-02");
 //            totalAmountOfSignals += printBollingerAndRsiOrStochasticOrHammerStrict(tickers, "2024-02-02");
 //            System.out.println("Total amount of signals - " + totalAmountOfSignals);
@@ -64,13 +74,13 @@ public class Main {
 //                    "2023-09-20");
             //fulfillInfo2022();
             //writeToFileFromResources("src/main/resources/strategies/BollingerBandsRsiStochasticsForPostman2.csv" ,getTickersFromNyseAndNasdaq());
-            fulfillDaily();
+//            fulfillDaily();
             //printTechnicalTechnicalSummaryAnalysisEvents();
             //writePricesAndVolumesToFile();
             //writeResultsOfBuyByBollingerAndStochastic();
             //printBollingerStrategy2();
         } finally {
-            closeMySqlConnection();
+//            closeMySqlConnection();
         }
     }
 
@@ -163,9 +173,34 @@ public class Main {
         } while (tickers != null && tickers.size() > 0);
     }
 
-    public static void testHammerPattern(List<String> tickers, int lengthOfPosition) {
-        for (int i = 0; i < tickers.size();i++) {
-            System.out.println(i + ". test Hammer on " + tickers.get(i) + "ticker");
+    public static void calculateIntermediateResult() throws IOException {
+        ObjectMapper objectMapper = new ObjectMapper();
+        List<IntermediateResult> intermediateResult = objectMapper.readValue(readFileFromProject("intermediateResult.json"), new TypeReference<>(){});
+        Result result = new Result();
+        result.setAmountOfFalseSignals(intermediateResult.stream().filter(IntermediateResult::isSignalFalse).count());
+        result.setAmountOfTrueSignals(intermediateResult.stream().filter(x -> !x.isSignalFalse()).count());
+        result.setTrueSignalsData(new TrueSignalsData());
+        List<Double> sortedProfits = intermediateResult.stream().filter(x -> !x.isSignalFalse()).map(IntermediateResult::getRelativeMaxProfit).sorted(Comparator.comparingDouble(x -> x)).toList();
+        result.getTrueSignalsData().setAverageRelativeProfit(sortedProfits.stream().mapToDouble(Double::doubleValue).average().getAsDouble());
+
+        objectMapper.writeValue(new File("result.json"), result);
+    }
+
+    public static void testHammerPattern(List<String> tickers, int lengthOfPosition) throws IOException {
+        ObjectMapper objectMapper = new ObjectMapper();
+        List<IntermediateResult> intermediateResult = objectMapper.readValue(readFileFromProject("intermediateResult.json"), new TypeReference<>(){});
+
+        // Print count of stocks where event was caught
+//        Map<String, Long> counted = intermediateResult.stream()
+//                .collect(Collectors.groupingBy(IntermediateResult::getTicker, Collectors.counting()));
+//        System.out.println(counted.size());
+         //Print count of stocks where event was caught more or equal than 8 times
+//        System.out.println(
+//                counted.entrySet().stream().filter(x -> x.getValue() >= 10).count()
+//        );
+//        for (int i = 0; i < tickers.size();i++) {
+        for (int i = 200; i < 600; i++) {
+            System.out.println(i + ". test Hammer on " + tickers.get(i) + " ticker");
 
             // Read data and calculate indicators
             BarSeries series = null;
@@ -182,22 +217,39 @@ public class Main {
             }
             ClosePriceIndicator close = new ClosePriceIndicator(series);
             SMAIndicator lowSma = new SMAIndicator(new LowPriceIndicator(series), 10);
-            for (int j = 60; j <= series.getEndIndex(); j++) {
-                if (!isCandleRed(series.getBar(j)) && close.getValue(j).isGreaterThan(close.getValue(j - 1))
-                        && isBullishShavenTopWithLongShadow(series.getBar(j - 1))
-                        && lowSma.getValue(j - 2).isLessThan(lowSma.getValue(j - 3))
-                        && lowSma.getValue(j - 3).isLessThan(lowSma.getValue(j - 4))
-                        && lowSma.getValue(j - 4).isLessThan(lowSma.getValue(j - 5))
-                        && lowSma.getValue(j - 5).isLessThan(lowSma.getValue(j - 6))
-                        && lowSma.getValue(j - 6).isLessThan(lowSma.getValue(j - 7))
-                        && lowSma.getValue(j - 7).isLessThan(lowSma.getValue(j - 8))
-                        && lowSma.getValue(j - 8).isLessThan(lowSma.getValue(j - 9))
-                        && lowSma.getValue(j - 9).isLessThan(lowSma.getValue(j - 10))
-                        && lowSma.getValue(j - 10).isLessThan(lowSma.getValue(j - 11))) {
-                    Num entryPrice = series.getBar(j + 1).getOpenPrice();
+            for (int j = 60; j <= series.getEndIndex() - lengthOfPosition; j++) {
+                if (isBullishShavenTopWithLongShadow(series.getBar(j))) {
+                    Bar prev60BarsMaxPriceBar = series.getBarData().subList(j - 60, j).stream().max(Comparator.comparingDouble(x -> x.getHighPrice().doubleValue())).get();
+                    double prev60BarsMaxPrice = prev60BarsMaxPriceBar.getHighPrice().doubleValue();
+                    double prev60BarsMinPrice = series.getBarData().subList(j - 60, j).stream().min(Comparator.comparingDouble(x -> x.getLowPrice().doubleValue())).get().getLowPrice().doubleValue();
+                    double diffPrev60BarsMaxMin = prev60BarsMaxPrice - prev60BarsMinPrice;
+                    double entryPrice = series.getBar(j + 1).getOpenPrice().doubleValue();
+                    Bar nextXBarsMaxBar = series.getBarData().subList(j + 1, j + 1 + lengthOfPosition).stream().max(Comparator.comparingDouble(x -> x.getHighPrice().doubleValue())).get();
+                    double nextXBarsMaxPrice = nextXBarsMaxBar.getHighPrice().doubleValue();
+                    double nextXBarsMinPrice = series.getBarData().subList(j + 1, j + 1 + lengthOfPosition).stream().min(Comparator.comparingDouble(x -> x.getLowPrice().doubleValue())).get().getLowPrice().doubleValue();
+                    boolean isSignalFalse = nextXBarsMaxPrice <= entryPrice;
+                    if (isSignalFalse) {
+                        double relativeLoss = nextXBarsMinPrice/diffPrev60BarsMaxMin;
+                        intermediateResult.add(new IntermediateResult(tickers.get(i), isSignalFalse, 0, relativeLoss));
+                        // debug
+//                        System.out.println();
+//                        System.out.println("False signal, date - " + series.getBar(j).getDateName() + "; relative loss - " + relativeLoss);
+//                        System.out.println("Loss - " + nextXBarsMinPrice);
+                    } else {
+                        double maxProfit = nextXBarsMaxPrice - entryPrice;
+                        double requiredStopLoss = series.getBarData().subList(j + 1, series.getBarData().indexOf(nextXBarsMaxBar) + 1).stream().min(Comparator.comparingDouble(x -> x.getLowPrice().doubleValue())).get().getLowPrice().doubleValue();
+                        double relativeMaxProfit = maxProfit / diffPrev60BarsMaxMin;
+                        double relativeRequiredStopLoss = (entryPrice - requiredStopLoss) / diffPrev60BarsMaxMin;
+                        intermediateResult.add(new IntermediateResult(tickers.get(i), isSignalFalse, relativeMaxProfit, relativeRequiredStopLoss));
+                        // debug
+//                        System.out.println();
+//                        System.out.println("True signal, date - " + series.getBar(j).getDateName() + "; relative required stoploss - " + relativeRequiredStopLoss + "; relative max profit - " + relativeMaxProfit);
+//                        System.out.println("required stoploss - " + requiredStopLoss + "; max profit - " + maxProfit);
+                    }
                 }
             }
         }
+        objectMapper.writeValue(new File("intermediateResult.json"), intermediateResult);
     }
 
     public static int printScorePlusMinus3Events(List<String> tickers, String startDate, String endDate) throws Exception {
