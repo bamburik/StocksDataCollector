@@ -1,25 +1,21 @@
 package org.bamburov.utils;
 
 import io.restassured.path.json.JsonPath;
-import io.restassured.response.Response;
 import org.ta4j.core.*;
 import org.ta4j.core.indicators.RSIIndicator;
 import org.ta4j.core.indicators.StochasticOscillatorKIndicator;
-import org.ta4j.core.num.DoubleNum;
 import org.ta4j.core.num.Num;
 
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 
+import static org.bamburov.Main.getProps;
 import static org.bamburov.utils.Constants.*;
-import static org.bamburov.utils.Constants.DAILY_INFO_VOLUME_BY_INDEX_FORMAT;
 import static org.bamburov.utils.FileUtils.readFileFromProject;
-import static org.bamburov.utils.FileUtils.readFileFromResourcesToString;
 
 public class TechnicalAnalysisUtils {
     public static BarSeries fillData(String path, String stockTicker) throws IOException {
@@ -44,7 +40,7 @@ public class TechnicalAnalysisUtils {
     }
 
     public static BarSeries getBarSeriesFor(String ticker, int period, String fromDate) throws IOException {
-        JsonPath jsonPath = new JsonPath(readFileFromProject("C:\\Users\\v.bamburov\\Documents\\personal\\FileWriteService\\data\\" + ticker + ".json"));
+        JsonPath jsonPath = new JsonPath(readFileFromProject(getProps().getPathToFreshPricesFolder() + ticker + ".json"));
         String fullDate = jsonPath.getString(String.format(PRICE_AND_VOLUME_HISTORY_FULL_DATE_BY_SHORT_DATE_FORMAT, fromDate));
         if (fullDate == null) {
             return null;

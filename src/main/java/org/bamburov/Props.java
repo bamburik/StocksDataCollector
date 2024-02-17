@@ -9,4 +9,5 @@ public class Props {
     private String mysqlPassword;
     private int startPageIndex;
     private String date;
+    private String pathToFreshPricesFolder;
 }

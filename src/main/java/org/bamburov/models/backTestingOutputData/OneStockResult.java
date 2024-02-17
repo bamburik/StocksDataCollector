@@ -5,8 +5,8 @@ import lombok.Data;
 @Data
 public class OneStockResult {
     private String ticker;
-    private int amountOfTrueSignals;
-    private int amountOfFalseSignals;
+    private long amountOfTrueSignals;
+    private long amountOfFalseSignals;
     private TrueSignalsData trueSignalsData;
     private FalseSignalsData falseSignalsData;
 }

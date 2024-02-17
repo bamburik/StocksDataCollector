@@ -1,6 +1,5 @@
 package org.bamburov;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.restassured.path.json.exception.JsonPathException;
@@ -8,9 +7,7 @@ import io.restassured.response.Response;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.bamburov.models.*;
-import org.bamburov.models.backTestingOutputData.IntermediateResult;
-import org.bamburov.models.backTestingOutputData.Result;
-import org.bamburov.models.backTestingOutputData.TrueSignalsData;
+import org.bamburov.models.backTestingOutputData.*;
 import org.bamburov.ta.core.MyPosition;
 import org.bamburov.ta.core.MyTradingRecord;
 import org.bamburov.ta.rule.BollingerAndStochasticBuyMyRule;
@@ -30,21 +27,21 @@ import org.ta4j.core.indicators.helpers.HighPriceIndicator;
 import org.ta4j.core.indicators.helpers.LowPriceIndicator;
 import org.ta4j.core.indicators.helpers.VolumeIndicator;
 import org.ta4j.core.indicators.statistics.StandardDeviationIndicator;
-import org.ta4j.core.num.Num;
 import org.ta4j.core.rules.CrossedDownIndicatorRule;
 import org.ta4j.core.rules.CrossedUpIndicatorRule;
 import org.ta4j.core.rules.StopLossRule;
 
 import java.io.*;
 import java.util.*;
-import java.util.function.Function;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import static io.restassured.RestAssured.given;
 import static org.bamburov.utils.ApiUtils.*;
 import static org.bamburov.utils.FileUtils.readFileFromProject;
 import static org.bamburov.utils.FileUtils.readFileFromResourcesToList;
 import static org.bamburov.utils.MySqlUtils.*;
+import static org.bamburov.utils.StatisticsUtils.*;
 import static org.bamburov.utils.TechnicalAnalysisUtils.*;
 import static org.bamburov.utils.TechnicalAnalysisUtils.getRangesWhereRsiAbove68;
 import static org.bamburov.utils.TrendLineUtils.getKOfResistanceLine;
@@ -60,9 +57,11 @@ public class Main {
             loadProperties();
 
             //printBollingerAndRsiOrStochastic("2023-11-24");
-//            createMySqlConnection();
             List<String> tickers = readFileFromResourcesToList("strategies/BollingerBandsRsiStochastics2.csv");
-            testHammerPattern(tickers, 15);
+            //List<String> tickers = Arrays.asList("AAOI");
+            //testStrategy(tickers, 15);
+//            calculateIntermediateResult();
+            createMySqlConnection();
 //            int totalAmountOfSignals = printScorePlusMinus3Events(tickers, "2024-02-01", "2024-02-02");
 //            totalAmountOfSignals += printBollingerAndRsiOrStochasticOrHammerStrict(tickers, "2024-02-02");
 //            System.out.println("Total amount of signals - " + totalAmountOfSignals);
@@ -74,13 +73,13 @@ public class Main {
 //                    "2023-09-20");
             //fulfillInfo2022();
             //writeToFileFromResources("src/main/resources/strategies/BollingerBandsRsiStochasticsForPostman2.csv" ,getTickersFromNyseAndNasdaq());
-//            fulfillDaily();
+            fulfillDaily();
             //printTechnicalTechnicalSummaryAnalysisEvents();
             //writePricesAndVolumesToFile();
             //writeResultsOfBuyByBollingerAndStochastic();
             //printBollingerStrategy2();
         } finally {
-//            closeMySqlConnection();
+            closeMySqlConnection();
         }
     }
 
@@ -173,7 +172,70 @@ public class Main {
         } while (tickers != null && tickers.size() > 0);
     }
 
-    public static void calculateIntermediateResult() throws IOException {
+    public static void testStrategy(
+            List<String> tickers,
+            double relativeTakeProfit,
+            double relativeStoploss,
+            double initialCapital,
+            int lengthOfPosition) throws IOException {
+        ObjectMapper objectMapper = new ObjectMapper();
+        double capital = initialCapital;
+        for (int i = 0; i < tickers.size(); i++) {
+            System.out.println(i + ". test Harammi on " + tickers.get(i) + " ticker");
+            // Read data and calculate indicators
+            BarSeries series = null;
+            try {
+                series = fillDataFor(tickers.get(i));
+            } catch (IOException e) {
+                continue;
+            } catch (JsonPathException e) {
+                continue;
+            }
+            // Filter stocks with low liquidity
+            if (series.getBarData().stream().filter(s -> s.getVolume().doubleValue() < 50).toList().size() > 10) {
+                continue;
+            }
+            ClosePriceIndicator close = new ClosePriceIndicator(series);
+            RSIIndicator rsi = new RSIIndicator(close, 14);
+            SMAIndicator volumeSma = new SMAIndicator(new VolumeIndicator(series), 40);
+            SMAIndicator closeSma = new SMAIndicator(close, 40);
+            for (int j = 60; j <= series.getEndIndex() - lengthOfPosition; j++) {
+                if (isCandleRed(series.getBar(j - 1)) && !isCandleRed(series.getBar(j))
+                        && series.getBar(j - 1).getOpenPrice().isGreaterThan(series.getBar(j).getHighPrice())
+                        && series.getBar(j - 1).getClosePrice().isLessThan(series.getBar(j).getLowPrice())
+                        && rsi.getValue(j).doubleValue() <= 32
+                        && volumeSma.getValue(j).multipliedBy(closeSma.getValue(j)).isGreaterThan(closeSma.numOf(1000000))) {
+                    Bar prev60BarsMaxPriceBar = series.getBarData().subList(j - 60, j).stream().max(Comparator.comparingDouble(x -> x.getHighPrice().doubleValue())).get();
+                    double prev60BarsMaxPrice = prev60BarsMaxPriceBar.getHighPrice().doubleValue();
+                    double prev60BarsMinPrice = series.getBarData().subList(j - 60, j).stream().min(Comparator.comparingDouble(x -> x.getLowPrice().doubleValue())).get().getLowPrice().doubleValue();
+                    double diffPrev60BarsMaxMin = prev60BarsMaxPrice - prev60BarsMinPrice;
+                    double entryPrice = series.getBar(j + 1).getOpenPrice().doubleValue();
+                    int countOfShares = (int) (capital / entryPrice);
+                    double takeProfit = entryPrice + relativeTakeProfit * diffPrev60BarsMaxMin;
+                    double stoploss = entryPrice - relativeStoploss * diffPrev60BarsMaxMin;
+                    List<Bar> sublist = series.getBarData().subList(j + 1, j + 1 + lengthOfPosition);
+                    int stopLossIndex = IntStream.range(0, sublist.size())
+                            .filter(x -> sublist.get(x).getLowPrice().doubleValue() <= stoploss)
+                            .findFirst().orElse(lengthOfPosition + 1);
+                    int takeProfitIndex = IntStream.range(0, sublist.size())
+                            .filter(x -> sublist.get(x).getHighPrice().doubleValue() >= takeProfit)
+                            .findFirst().orElse(lengthOfPosition + 1);
+                    double exitPrice;
+                    if (takeProfitIndex == lengthOfPosition + 1 && stopLossIndex == lengthOfPosition + 1) {
+                        exitPrice = sublist.get(sublist.size() - 1).getClosePrice().doubleValue();
+                    } else if (stopLossIndex <= takeProfitIndex) {
+                        exitPrice = stoploss;
+                    } else {
+                        exitPrice = takeProfit;
+                    }
+                    capital += ((exitPrice - entryPrice) * countOfShares);
+                }
+            }
+            System.out.println(capital);
+        }
+    }
+
+        public static void calculateIntermediateResult() throws IOException {
         ObjectMapper objectMapper = new ObjectMapper();
         List<IntermediateResult> intermediateResult = objectMapper.readValue(readFileFromProject("intermediateResult.json"), new TypeReference<>(){});
         Result result = new Result();
@@ -181,26 +243,65 @@ public class Main {
         result.setAmountOfTrueSignals(intermediateResult.stream().filter(x -> !x.isSignalFalse()).count());
         result.setTrueSignalsData(new TrueSignalsData());
         List<Double> sortedProfits = intermediateResult.stream().filter(x -> !x.isSignalFalse()).map(IntermediateResult::getRelativeMaxProfit).sorted(Comparator.comparingDouble(x -> x)).toList();
-        result.getTrueSignalsData().setAverageRelativeProfit(sortedProfits.stream().mapToDouble(Double::doubleValue).average().getAsDouble());
+        result.getTrueSignalsData().setAverageRelativeProfit(sortedProfits.stream().mapToDouble(Double::doubleValue).average().orElse(0));
+        result.getTrueSignalsData().setTenPercentileRelativeProfit(get10thPercentile(sortedProfits));
+        result.getTrueSignalsData().setFiftyPercentileRelativeProfit(get50thPercentile(sortedProfits));
+        result.getTrueSignalsData().setNinetyPercentileRelativeProfit(get90thPercentile(sortedProfits));
+        List<Double> sortedRequiredStoplosses = intermediateResult.stream().filter(x -> !x.isSignalFalse()).map(IntermediateResult::getRelativeRequiredStoploss).sorted(Comparator.comparingDouble(x -> x)).toList();
+        result.getTrueSignalsData().setAverageRelativeRequiredStopLoss(sortedRequiredStoplosses.stream().mapToDouble(Double::doubleValue).average().orElse(0));
+        result.getTrueSignalsData().setTenPercentileRelativeRequiredStopLoss(get10thPercentile(sortedRequiredStoplosses));
+        result.getTrueSignalsData().setFiftyPercentileRelativeRequiredStopLoss(get50thPercentile(sortedRequiredStoplosses));
+        result.getTrueSignalsData().setNinetyPercentileRelativeRequiredStopLoss(get90thPercentile(sortedRequiredStoplosses));
 
+        result.setFalseSignalsData(new FalseSignalsData());
+        List<Double> sortedLosses = intermediateResult.stream().filter(IntermediateResult::isSignalFalse).map(IntermediateResult::getRelativeRequiredStoploss).sorted(Comparator.comparingDouble(x -> x)).toList();
+        result.getFalseSignalsData().setAverageRelativeMaxLoss(sortedLosses.stream().mapToDouble(Double::doubleValue).average().orElse(0));
+        result.getFalseSignalsData().setTenPercentileRelativeMaxLoss(get10thPercentile(sortedLosses));
+        result.getFalseSignalsData().setFiftyPercentileRelativeMaxLoss(get50thPercentile(sortedLosses));
+        result.getFalseSignalsData().setNinetyPercentileRelativeMaxLoss(get90thPercentile(sortedLosses));
+
+        // Print count of stocks where event was caught more or equal than 10 times
+        List<String> counted = intermediateResult.stream()
+                .collect(Collectors.groupingBy(IntermediateResult::getTicker, Collectors.counting()))
+                .entrySet().stream().filter(x -> x.getValue() >= 10).map(Map.Entry::getKey).toList();
+        System.out.println(counted.size());
+
+        result.setStocks(new ArrayList<>());
+        for (String ticker : counted) {
+            List<IntermediateResult> list = intermediateResult.stream().filter(x -> x.getTicker().equals(ticker)).toList();
+            OneStockResult oneStockResult = new OneStockResult();
+            oneStockResult.setTicker(ticker);
+            oneStockResult.setAmountOfFalseSignals(list.stream().filter(IntermediateResult::isSignalFalse).count());
+            oneStockResult.setAmountOfTrueSignals(list.stream().filter(x -> !x.isSignalFalse()).count());
+            oneStockResult.setTrueSignalsData(new TrueSignalsData());
+            List<Double> sublistSortedProfits = list.stream().filter(x -> !x.isSignalFalse()).map(IntermediateResult::getRelativeMaxProfit).sorted(Comparator.comparingDouble(x -> x)).toList();
+            oneStockResult.getTrueSignalsData().setAverageRelativeProfit(sublistSortedProfits.stream().mapToDouble(Double::doubleValue).average().orElse(0));
+            oneStockResult.getTrueSignalsData().setTenPercentileRelativeProfit(get10thPercentile(sublistSortedProfits));
+            oneStockResult.getTrueSignalsData().setFiftyPercentileRelativeProfit(get50thPercentile(sublistSortedProfits));
+            oneStockResult.getTrueSignalsData().setNinetyPercentileRelativeProfit(get90thPercentile(sublistSortedProfits));
+            List<Double> sublistSortedRequiredStoplosses = list.stream().filter(x -> !x.isSignalFalse()).map(IntermediateResult::getRelativeRequiredStoploss).sorted(Comparator.comparingDouble(x -> x)).toList();
+            oneStockResult.getTrueSignalsData().setAverageRelativeRequiredStopLoss(sublistSortedRequiredStoplosses.stream().mapToDouble(Double::doubleValue).average().orElse(0));
+            oneStockResult.getTrueSignalsData().setTenPercentileRelativeRequiredStopLoss(get10thPercentile(sublistSortedRequiredStoplosses));
+            oneStockResult.getTrueSignalsData().setFiftyPercentileRelativeRequiredStopLoss(get50thPercentile(sublistSortedRequiredStoplosses));
+            oneStockResult.getTrueSignalsData().setNinetyPercentileRelativeRequiredStopLoss(get90thPercentile(sublistSortedRequiredStoplosses));
+
+            oneStockResult.setFalseSignalsData(new FalseSignalsData());
+            List<Double> sublistSortedLosses = intermediateResult.stream().filter(IntermediateResult::isSignalFalse).map(IntermediateResult::getRelativeRequiredStoploss).sorted(Comparator.comparingDouble(x -> x)).toList();
+            oneStockResult.getFalseSignalsData().setAverageRelativeMaxLoss(sublistSortedLosses.stream().mapToDouble(Double::doubleValue).average().orElse(0));
+            oneStockResult.getFalseSignalsData().setTenPercentileRelativeMaxLoss(get10thPercentile(sublistSortedLosses));
+            oneStockResult.getFalseSignalsData().setFiftyPercentileRelativeMaxLoss(get50thPercentile(sublistSortedLosses));
+            oneStockResult.getFalseSignalsData().setNinetyPercentileRelativeMaxLoss(get90thPercentile(sublistSortedLosses));
+            result.getStocks().add(oneStockResult);
+        }
         objectMapper.writeValue(new File("result.json"), result);
     }
 
-    public static void testHammerPattern(List<String> tickers, int lengthOfPosition) throws IOException {
+    public static void testStrategy(List<String> tickers, int lengthOfPosition) throws IOException {
         ObjectMapper objectMapper = new ObjectMapper();
         List<IntermediateResult> intermediateResult = objectMapper.readValue(readFileFromProject("intermediateResult.json"), new TypeReference<>(){});
-
-        // Print count of stocks where event was caught
-//        Map<String, Long> counted = intermediateResult.stream()
-//                .collect(Collectors.groupingBy(IntermediateResult::getTicker, Collectors.counting()));
-//        System.out.println(counted.size());
-         //Print count of stocks where event was caught more or equal than 8 times
-//        System.out.println(
-//                counted.entrySet().stream().filter(x -> x.getValue() >= 10).count()
-//        );
 //        for (int i = 0; i < tickers.size();i++) {
-        for (int i = 200; i < 600; i++) {
-            System.out.println(i + ". test Hammer on " + tickers.get(i) + " ticker");
+        for (int i = 0; i < tickers.size(); i++) {
+            System.out.println(i + ". test Harammi on " + tickers.get(i) + " ticker");
 
             // Read data and calculate indicators
             BarSeries series = null;
@@ -216,9 +317,15 @@ public class Main {
                 continue;
             }
             ClosePriceIndicator close = new ClosePriceIndicator(series);
-            SMAIndicator lowSma = new SMAIndicator(new LowPriceIndicator(series), 10);
+            RSIIndicator rsi = new RSIIndicator(close, 14);
+            SMAIndicator volumeSma = new SMAIndicator(new VolumeIndicator(series), 40);
+            SMAIndicator closeSma = new SMAIndicator(close, 40);
             for (int j = 60; j <= series.getEndIndex() - lengthOfPosition; j++) {
-                if (isBullishShavenTopWithLongShadow(series.getBar(j))) {
+                if (isCandleRed(series.getBar(j - 1)) && !isCandleRed(series.getBar(j))
+                        && series.getBar(j - 1).getOpenPrice().isGreaterThan(series.getBar(j).getHighPrice())
+                        && series.getBar(j - 1).getClosePrice().isLessThan(series.getBar(j).getLowPrice())
+                        && rsi.getValue(j).doubleValue() <= 32
+                        && volumeSma.getValue(j).multipliedBy(closeSma.getValue(j)).isGreaterThan(closeSma.numOf(1000000))) {
                     Bar prev60BarsMaxPriceBar = series.getBarData().subList(j - 60, j).stream().max(Comparator.comparingDouble(x -> x.getHighPrice().doubleValue())).get();
                     double prev60BarsMaxPrice = prev60BarsMaxPriceBar.getHighPrice().doubleValue();
                     double prev60BarsMinPrice = series.getBarData().subList(j - 60, j).stream().min(Comparator.comparingDouble(x -> x.getLowPrice().doubleValue())).get().getLowPrice().doubleValue();
@@ -229,12 +336,12 @@ public class Main {
                     double nextXBarsMinPrice = series.getBarData().subList(j + 1, j + 1 + lengthOfPosition).stream().min(Comparator.comparingDouble(x -> x.getLowPrice().doubleValue())).get().getLowPrice().doubleValue();
                     boolean isSignalFalse = nextXBarsMaxPrice <= entryPrice;
                     if (isSignalFalse) {
-                        double relativeLoss = nextXBarsMinPrice/diffPrev60BarsMaxMin;
+                        double relativeLoss = (entryPrice - nextXBarsMinPrice)/diffPrev60BarsMaxMin;
                         intermediateResult.add(new IntermediateResult(tickers.get(i), isSignalFalse, 0, relativeLoss));
                         // debug
 //                        System.out.println();
 //                        System.out.println("False signal, date - " + series.getBar(j).getDateName() + "; relative loss - " + relativeLoss);
-//                        System.out.println("Loss - " + nextXBarsMinPrice);
+//                        System.out.println("Loss - " + (entryPrice - nextXBarsMinPrice));
                     } else {
                         double maxProfit = nextXBarsMaxPrice - entryPrice;
                         double requiredStopLoss = series.getBarData().subList(j + 1, series.getBarData().indexOf(nextXBarsMaxBar) + 1).stream().min(Comparator.comparingDouble(x -> x.getLowPrice().doubleValue())).get().getLowPrice().doubleValue();
@@ -790,6 +897,7 @@ public class Main {
         props.setMysqlPassword(properties.getProperty("mysql.password"));
         props.setStartPageIndex(Integer.parseInt(properties.getProperty("startPageIndex")));
         props.setDate(properties.getProperty("date"));
+        props.setPathToFreshPricesFolder(properties.getProperty("pathToFreshPricesFolder"));
         input.close();
     }
 }
